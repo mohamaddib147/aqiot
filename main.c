@@ -29,10 +29,11 @@
 #include "periph/rtt.h"
 #include "periph/i2c.h"
 #include <errno.h>
+
 #include <stdint.h>
 #include "xtimer.h"
 #include "pms5003.h"
-#include "net/gnrc/rpl.h"
+
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -346,15 +347,15 @@ int main(void)
 
     /* initialize our subscription buffers */
     memset(subscriptions, 0, (NUMOFSUBS * sizeof(emcute_sub_t)));
+/* start shell */
+    char line_buf[SHELL_DEFAULT_BUFSIZE];
+    shell_run(shell_commands, line_buf, SHELL_DEFAULT_BUFSIZE);
 
     /* start the emcute thread */
     thread_create(stack, sizeof(stack), EMCUTE_PRIO, 0,
                   emcute_thread, NULL, "emcute");
 
-    /* start shell */
-    char line_buf[SHELL_DEFAULT_BUFSIZE];
-    shell_run(shell_commands, line_buf, SHELL_DEFAULT_BUFSIZE);
-
+    
     /* should be never reached */
     return 0;
 }
