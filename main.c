@@ -1,23 +1,12 @@
-/*
- * Copyright (C) 2015 Freie Universität Berlin
- *
- * This file is subject to the terms and conditions of the GNU Lesser
- * General Public License v2.1. See the file LICENSE in the top level
- * directory for more details.
- */
 
-/**
- * @ingroup     examples
- * @{
- *
- * @file
- * @brief       Example application for demonstrating RIOT's MQTT-SN library
- *              emCute
- *
- * @author      Hauke Petersen <hauke.petersen@fu-berlin.de>
- *
- * @}
- */
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+
+#include "shell.h"
+#include "msg.h"
+#include "net/emcute.h"
+#include "net/ipv6/addr.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -29,21 +18,9 @@
 #include "periph/rtt.h"
 #include "periph/i2c.h"
 #include <errno.h>
-
 #include <stdint.h>
 #include "xtimer.h"
 #include "pms5003.h"
-
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
-
-#include "shell.h"
-#include "msg.h"
-#include "net/emcute.h"
-#include "net/ipv6/addr.h"
-#include "thread.h"
-
 #ifndef EMCUTE_ID
 #define EMCUTE_ID           ("gertrud")
 #endif
@@ -63,14 +40,14 @@ static void *emcute_thread(void *arg)
 {
     (void)arg;
     emcute_run(EMCUTE_PORT, EMCUTE_ID);
-    return NULL;    /* should never be reached */
+    //return NULL;    /* should never be reached */
     /* Connect to the MQTT-SN gateway */
     sock_udp_ep_t gw = {
         .family = AF_INET6,
         .port = 10000,
     };
     ipv6_addr_from_str((ipv6_addr_t *)&gw.addr.ipv6, "2001:6b0:32:13::236");
-    if (emcute_con(&gw, true, NULL, NULL, 0, 0) != EMCUTE_OK) {
+    if (cmd_con(&gw, true, NULL, NULL, 0, 0) != EMCUTE_OK) {
         puts("error: unable to connect to MQTT-SN gateway");
         return NULL;
     }
@@ -116,7 +93,7 @@ static void *emcute_thread(void *arg)
                  pm1, pm2_5, pm10, db0_3, db0_5, db1, db2_5, db5, db10);
 
         /* Publish data to broker */
-        if (emcute_pub(&topic, json, strlen(json), EMCUTE_QOS_1) != EMCUTE_OK) {
+        if (cmd_pub(&topic, json, strlen(json), EMCUTE_QOS_1) != EMCUTE_OK) {
             puts("error: unable to publish data to MQTT broker");
         } else {
             printf("Published data to MQTT broker: %s\n", json);
@@ -127,7 +104,6 @@ static void *emcute_thread(void *arg)
     }
     return NULL;    /* should never be reached */
 }
-
 static void on_pub(const emcute_topic_t *topic, void *data, size_t len)
 {
     char *in = (char *)data;
@@ -341,21 +317,21 @@ int main(void)
     puts("MQTT-SN example application\n");
     puts("Type 'help' to get started. Have a look at the README.md for more"
          "information.");
- pms5003_init();
-    /* the main thread needs a msg queue to be able to run `ping`*/
+
+    /* the main thread needs a msg queue to be able to run `ping6`*/
     msg_init_queue(queue, ARRAY_SIZE(queue));
 
     /* initialize our subscription buffers */
     memset(subscriptions, 0, (NUMOFSUBS * sizeof(emcute_sub_t)));
-/* start shell */
-    char line_buf[SHELL_DEFAULT_BUFSIZE];
-    shell_run(shell_commands, line_buf, SHELL_DEFAULT_BUFSIZE);
 
     /* start the emcute thread */
     thread_create(stack, sizeof(stack), EMCUTE_PRIO, 0,
                   emcute_thread, NULL, "emcute");
 
-    
+    /* start shell */
+    char line_buf[SHELL_DEFAULT_BUFSIZE];
+    shell_run(shell_commands, line_buf, SHELL_DEFAULT_BUFSIZE);
+
     /* should be never reached */
     return 0;
 }
