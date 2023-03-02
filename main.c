@@ -18,6 +18,16 @@
  *
  * @}
  */
+
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+
+#include "shell.h"
+#include "msg.h"
+#include "net/emcute.h"
+#include "net/ipv6/addr.h"
+
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -29,20 +39,10 @@
 #include "periph/rtt.h"
 #include "periph/i2c.h"
 #include <errno.h>
-
 #include <stdint.h>
 #include "xtimer.h"
 #include "pms5003.h"
 
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
-
-#include "shell.h"
-#include "msg.h"
-#include "net/emcute.h"
-#include "net/ipv6/addr.h"
-#include "thread.h"
 
 #ifndef EMCUTE_ID
 #define EMCUTE_ID           ("gertrud")
@@ -64,7 +64,6 @@ static void *emcute_thread(void *arg)
     (void)arg;
     emcute_run(EMCUTE_PORT, EMCUTE_ID);
     return NULL;    /* should never be reached */
-   
 }
 
 static void on_pub(const emcute_topic_t *topic, void *data, size_t len)
@@ -264,11 +263,19 @@ static int cmd_will(int argc, char **argv)
     puts("Successfully updated last will topic and message");
     return 0;
 }
+static int cmd_read(__attribute__((unused)) int ac, __attribute__((unused)) char **av)
+{
+  printf("PM[1 2.5 10]: %-u %-u %-u\n", pms5003_pm1(), pms5003_pm2_5(), pms5003_pm10());
+  printf("DB[0.3 0.5 1.0 2.5 5 10]: %-u %-u %-u %-u %-u %-u\n", pms5003_db0_3(), pms5003_db0_5(),
+	 pms5003_db1(),  pms5003_db2_5(), pms5003_db5(), pms5003_db10());
+  return 0;
+}
 
 static const shell_command_t shell_commands[] = {
     { "con", "connect to MQTT broker", cmd_con },
     { "discon", "disconnect from the current broker", cmd_discon },
     { "pub", "publish something", cmd_pub },
+    { "read", "read PM sensor data", cmd_read},
     { "sub", "subscribe topic", cmd_sub },
     { "unsub", "unsubscribe from topic", cmd_unsub },
     { "will", "register a last will", cmd_will },
@@ -277,85 +284,24 @@ static const shell_command_t shell_commands[] = {
 
 int main(void)
 {
-
     puts("MQTT-SN example application\n");
     puts("Type 'help' to get started. Have a look at the README.md for more"
          "information.");
- pms5003_init();
-    /* the main thread needs a msg queue to be able to run `ping`*/
+	 pms5003_init();
+    /* the main thread needs a msg queue to be able to run `ping6`*/
     msg_init_queue(queue, ARRAY_SIZE(queue));
 
     /* initialize our subscription buffers */
     memset(subscriptions, 0, (NUMOFSUBS * sizeof(emcute_sub_t)));
-/* start shell */
-    char line_buf[SHELL_DEFAULT_BUFSIZE];
-    shell_run(shell_commands, line_buf, SHELL_DEFAULT_BUFSIZE);
 
     /* start the emcute thread */
     thread_create(stack, sizeof(stack), EMCUTE_PRIO, 0,
                   emcute_thread, NULL, "emcute");
 
-    
-    sock_udp_ep_t gw = {
-        .family = AF_INET6,
-        .port = 10000,
-    };
-    ipv6_addr_from_str((ipv6_addr_t *)&gw.addr.ipv6, "2001:6b0:32:13::236");
-    if (emcute_con(&gw, true, NULL, NULL, 0, 0) != EMCUTE_OK) {
-        puts("error: unable to connect to MQTT-SN gateway");
-      //  return NULL;
-    }
-    printf("Successfully connected to MQTT-SN gateway at [%s]:%i\n",
-           "2001:6b0:32:13::236", (int)gw.port);
+    /* start shell */
+    char line_buf[SHELL_DEFAULT_BUFSIZE];
+    shell_run(shell_commands, line_buf, SHELL_DEFAULT_BUFSIZE);
 
-    /* Register the MQTT topic */
-    emcute_topic_t topic;
-    topic.name = "data";
-    if (emcute_reg(&topic) != EMCUTE_OK) {
-        puts("error: unable to register MQTT topic");
-      //  return NULL;
-    }
-    printf("Successfully registered topic '%s' with MQTT broker\n", topic.name);
-
-    /* Main loop: read data from sensor and publish to broker */
-    while (1) {
-        /* Read data from sensor */
-        uint32_t pm1 = pms5003_pm1();
-        uint32_t pm2_5 = pms5003_pm2_5();
-        uint32_t pm10 = pms5003_pm10();
-        uint32_t db0_3 = pms5003_db0_3();
-        uint32_t db0_5 = pms5003_db0_5();
-        uint32_t db1 = pms5003_db1();
-        uint32_t db2_5 = pms5003_db2_5();
-        uint32_t db5 = pms5003_db5();
-        uint32_t db10 = pms5003_db10();
-
-        /* Format data as JSON */
-        char json[256];
-        snprintf(json, sizeof(json),
-                 "{"
-                 "\"pm1\": %lu,"
-                 "\"pm2_5\": %lu,"
-                 "\"pm10\": %lu,"
-                 "\"db0_3\": %lu,"
-                 "\"db0_5\": %lu,"
-                 "\"db1\": %lu,"
-                 "\"db2_5\": %lu,"
-                 "\"db5\": %lu,"
-                 "\"db10\": %lu"
-                 "}",
-                 pm1, pm2_5, pm10, db0_3, db0_5, db1, db2_5, db5, db10);
-
-        /* Publish data to broker */
-        if (emcute_pub(&topic, json, strlen(json), EMCUTE_QOS_1) != EMCUTE_OK) {
-            puts("error: unable to publish data to MQTT broker");
-        } else {
-            printf("Published data to MQTT broker: %s\n", json);
-        }
-
-        /* Wait for a few seconds before reading again */
-        xtimer_sleep(30);
-    }
     /* should be never reached */
     return 0;
 }
