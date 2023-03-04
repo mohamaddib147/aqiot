@@ -27,43 +27,173 @@
 #include "msg.h"
 #include "net/emcute.h"
 #include "net/ipv6/addr.h"
-
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
-#include <time.h>
-#include "board.h"
-#include "shell.h"
-#include "thread.h"
-#include "msg.h"
-#include "periph/rtt.h"
-#include "periph/i2c.h"
-#include <errno.h>
-#include <stdint.h>
-#include "xtimer.h"
 #include "pms5003.h"
-
 
 #ifndef EMCUTE_ID
 #define EMCUTE_ID           ("gertrud")
 #endif
 #define EMCUTE_PORT         (1883U)
 #define EMCUTE_PRIO         (THREAD_PRIORITY_MAIN - 1)
+#define PUB_PRIO            (THREAD_PRIORITY_MAIN - 1)
 
 #define NUMOFSUBS           (16U)
 #define TOPIC_MAXLEN        (64U)
 
+#define INTERVAL (10U * US_PER_SEC)
+
 static char stack[THREAD_STACKSIZE_DEFAULT];
+static char pubstack[THREAD_STACKSIZE_DEFAULT];
 static msg_t queue[8];
 
 static emcute_sub_t subscriptions[NUMOFSUBS];
 static char topics[NUMOFSUBS][TOPIC_MAXLEN];
+
+char msg[5] = "pm1:";
 
 static void *emcute_thread(void *arg)
 {
     (void)arg;
     emcute_run(EMCUTE_PORT, EMCUTE_ID);
     return NULL;    /* should never be reached */
+}
+
+// static void msgformat (void)
+// {
+//     char pm1str[1];
+//     strcat(msg, itoa(pms5003_pm1(), pm1str, 10));
+// }
+
+static int pub (char *topic, char *msg)
+{
+    puts("Publishing a topic");
+    emcute_topic_t t;
+    unsigned flags = EMCUTE_QOS_0;
+
+    /* step 1: get topic id */
+    t.name = topic;
+    if (emcute_reg(&t) != EMCUTE_OK) {
+        //puts("error: unable to obtain topic ID");
+        return 1;
+    }
+
+    /* step 2: publish data */
+    if (emcute_pub(&t, msg, strlen(msg), flags) != EMCUTE_OK) {
+        printf("error: unable to publish data to topic '%s [%i]'\n",
+                t.name, (int)t.id);
+        return 1;
+    }
+    return 0;
+}
+
+static int con (void)
+{
+    sock_udp_ep_t gw = {
+        .family = AF_INET6,
+        .port = 10000
+    };
+
+    /* Parse address */
+     if (ipv6_addr_from_str((ipv6_addr_t *)&gw.addr.ipv6, "2001:6b0:32:13::236") == NULL) {
+        puts("error parsing IPv6 address");
+        return 1;
+    }
+
+    /* Connect to broker */
+   puts("Connecting");
+    if (emcute_con(&gw, true, NULL, NULL, 0, 0) != EMCUTE_OK) {
+        puts("error: unable to connect to broker");
+        return 1;
+    }
+
+    puts("Successfully connected to broker");
+  /* Connect to broker */
+  /*  if (connect_to_broker() != 0) {
+        return 1;
+    }
+    */
+       
+    /* should be never reached */
+    return 0;
+}
+
+
+static int discon(void)
+{
+    puts("Attempting to disconnect");
+    int res = emcute_discon();
+    if (res == EMCUTE_NOGW) {
+        puts("error: not connected to any broker");
+        return 1;
+    }
+    else if (res != EMCUTE_OK) {
+        puts("error: unable to disconnect");
+        return 1;
+    }
+    puts("Disconnect successful");
+    return 0;
+}
+
+static void *pub_thread(void *arg)
+{
+    (void)arg;
+    int pubdelay = 0;
+    xtimer_init();
+    xtimer_ticks32_t last_wakeup = xtimer_now();
+    puts("Pub thread activated");
+
+    while(1)
+    {
+        con();
+        // if(PM1alarm)
+        // {
+        //     // publish immediately
+        // }
+
+        // /*else*/if(pubdelay > 0) // if pubdelay+1 minutes has passed
+        // {
+        //     // publish an entry
+        //     int i = 0;
+        //     int error = 1;
+        //     for(i=0; i<3; i++) // check if you are able to ping the gateway 3 times
+        //     {
+        //         if(con())
+        //         {
+        //             error = 0; // indicate no error
+        //             break; // leave the loop
+         uint32_t pm1 = pms5003_pm1();
+        uint32_t pm2_5 = pms5003_pm2_5();
+        uint32_t pm10 = pms5003_pm10();
+        uint32_t db0_3 = pms5003_db0_3();
+        uint32_t db0_5 = pms5003_db0_5();
+        uint32_t db1 = pms5003_db1();
+        uint32_t db2_5 = pms5003_db2_5();
+        uint32_t db5 = pms5003_db5();
+        uint32_t db10 = pms5003_db10();
+
+        /* Format data as JSON */
+        char json[256];
+        snprintf(json, sizeof(json),
+                 
+                 "pm1:%lu,"
+                 "pm2d5:%lu,"
+                 "pm10:%lu,"
+                 "db0d3:%lu,"
+                 "db0d5:%lu,"
+                 "db1:%lu,"
+                 "db2d5:%lu,"
+                 "db5:%lu,"
+                 "db10:%lu"
+                 ,
+                 pm1, pm2_5, pm10, db0_3, db0_5, db1, db2_5, db5, db10);
+        pub("group3", json);
+        xtimer_periodic_wakeup(&last_wakeup, INTERVAL);
+        discon();
+        xtimer_periodic_wakeup(&last_wakeup, INTERVAL);   
+             
+        puts("pub_thread loop");
+        pubdelay += 1; // add 1 to the counter
+    }
+    return NULL;
 }
 
 static void on_pub(const emcute_topic_t *topic, void *data, size_t len)
@@ -263,22 +393,23 @@ static int cmd_will(int argc, char **argv)
     puts("Successfully updated last will topic and message");
     return 0;
 }
+
 static int cmd_read(__attribute__((unused)) int ac, __attribute__((unused)) char **av)
-{
-  printf("PM[1 2.5 10]: %-u %-u %-u\n", pms5003_pm1(), pms5003_pm2_5(), pms5003_pm10());
-  printf("DB[0.3 0.5 1.0 2.5 5 10]: %-u %-u %-u %-u %-u %-u\n", pms5003_db0_3(), pms5003_db0_5(),
-	 pms5003_db1(),  pms5003_db2_5(), pms5003_db5(), pms5003_db10());
-  return 0;
-}
+  {
+    printf("PM[1 2.5 10]: %-u %-u %-u\n", pms5003_pm1(), pms5003_pm2_5(), pms5003_pm10());
+    printf("DB[0.3 0.5 1.0 2.5 5 10]: %-u %-u %-u %-u %-u %-u\n", pms5003_db0_3(), pms5003_db0_5(),
+    pms5003_db1(),  pms5003_db2_5(), pms5003_db5(), pms5003_db10());
+    return 0;
+  }
 
 static const shell_command_t shell_commands[] = {
     { "con", "connect to MQTT broker", cmd_con },
     { "discon", "disconnect from the current broker", cmd_discon },
     { "pub", "publish something", cmd_pub },
-    { "read", "read PM sensor data", cmd_read},
     { "sub", "subscribe topic", cmd_sub },
     { "unsub", "unsubscribe from topic", cmd_unsub },
     { "will", "register a last will", cmd_will },
+    { "read", "read PM sensor data", cmd_read},
     { NULL, NULL, NULL }
 };
 
@@ -287,7 +418,7 @@ int main(void)
     puts("MQTT-SN example application\n");
     puts("Type 'help' to get started. Have a look at the README.md for more"
          "information.");
-	 pms5003_init();
+
     /* the main thread needs a msg queue to be able to run `ping6`*/
     msg_init_queue(queue, ARRAY_SIZE(queue));
 
@@ -297,6 +428,12 @@ int main(void)
     /* start the emcute thread */
     thread_create(stack, sizeof(stack), EMCUTE_PRIO, 0,
                   emcute_thread, NULL, "emcute");
+
+    /* start pms5003 thread */
+    pms5003_init();
+
+    thread_create(pubstack, sizeof(pubstack), PUB_PRIO, 0,
+                  pub_thread, NULL, "pub");
 
     /* start shell */
     char line_buf[SHELL_DEFAULT_BUFSIZE];
